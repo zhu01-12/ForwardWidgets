@@ -13,24 +13,6 @@
       "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/douban.js"
     },
     {
-      "id": "trakt",
-      "title": "Trakt我看&Trakt个性化推荐",
-      "description": "解析Trakt想看、在看、已看、片单、追剧日历以及根据个人数据生成的个性化推荐【30% off code：CHEAP】",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.15",
-      "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/trakt.js"
-    },
-    {
-      "id": "live",
-      "title": "直播(电视+网络)",
-      "description": "解析直播订阅链接【30% off code：CHEAP】",
-      "requiredVersion": "0.0.1",
-      "version": "1.0.10",
-      "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/live.js"
-    },
-    {
       "id": "yatu",
       "title": "雅图(每日放送+点播排行榜+评分排行榜)",
       "description": "解析雅图每日放送更新以及各类排行榜【30% off code：CHEAP】",
