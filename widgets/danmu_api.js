@@ -15,10 +15,10 @@
 WidgetMetadata = {
   id: "forward.auto.danmu_api",
   title: "LogVar",
-  version: "1.0.3",
+  version: "5.2.0",
   requiredVersion: "0.0.2",
   description: "从LogVar获取弹幕",
-  author: "huangxd",
+  author: "小振ℓινє",
   site: "https://github.com/huangxd-/ForwardWidgets",
   globalParams: [
     {
