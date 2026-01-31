@@ -1,7 +1,7 @@
 {
-  "title": "huangxd's Widgets",
+  "title": "小振ℓινє's Widgets",
   "description": "【30% off code：CHEAP】A collection of widgets created by huangxd",
-  "icon": "https://github.com/huangxd-/ForwardWidgets/raw/main/icon.png",
+  "icon": "https://github.com/zhu01-12/ForwardWidgets/raw/main/icon.png",
   "widgets": [
     {
       "id": "douban",
@@ -10,7 +10,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.20",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/douban.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/douban.js"
     },
     {
       "id": "trakt",
@@ -19,7 +19,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.15",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/trakt.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/trakt.js"
     },
     {
       "id": "live",
@@ -28,7 +28,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.10",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/live.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/live.js"
     },
     {
       "id": "yatu",
@@ -37,7 +37,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.6",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/yatu.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/yatu.js"
     },
     {
       "id": "zhuijurili",
@@ -46,7 +46,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.4",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/zhuijurili.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/zhuijurili.js"
     },
     {
       "id": "letterboxd",
@@ -55,7 +55,7 @@
       "requiredVersion": "0.0.1",
       "version": "1.0.2",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/letterboxd.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/letterboxd.js"
     },
     {
       "id": "forward.auto.danmu",
@@ -64,7 +64,7 @@
       "requiredVersion": "0.0.2",
       "version": "1.13.4",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/danmu_auto.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/danmu_auto.js"
     },
     {
       "id": "forward.auto.danmu_api",
@@ -73,7 +73,7 @@
       "requiredVersion": "0.0.2",
       "version": "1.0.3",
       "author": "小振ℓινє",
-      "url": "https://raw.githubusercontent.com/huangxd-/ForwardWidgets/refs/heads/main/widgets/danmu_api.js"
+      "url": "https://raw.githubusercontent.com/zhu01-12/ForwardWidgets/refs/heads/main/widgets/danmu_api.js"
     }
   ]
 }
