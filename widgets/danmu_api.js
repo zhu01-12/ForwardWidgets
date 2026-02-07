@@ -10,31 +10,32 @@
  * videoUrl: 视频链接，Optional
  * commentId: 弹幕ID，Optional。在搜索到弹幕列表后实际加载时会携带
  * animeId: 动漫ID，Optional。在搜索到动漫列表后实际加载时会携带
+ *
  */
-
 WidgetMetadata = {
   id: "forward.auto.danmu_api",
   title: "LogVar",
   version: "5.2.0",
   requiredVersion: "0.0.2",
-  description: "从LogVar获取弹幕（支持多服务器合并）",
+  description: "从LogVar获取弹幕",
   author: "小振ℓινє",
   site: "https://github.com/huangxd-/ForwardWidgets",
   globalParams: [
     {
       name: "server",
-      title: "弹幕服务器地址（一行一个，弹幕将从所有服务器合并获取）\n自部署项目地址：https://github.com/huangxd-/danmu_api.git",
-      type: "textarea",
+      title: "自定义服务器(自部署项目地址：https://github.com/huangxd-/danmu_api.git)",
+      type: "input",
       placeholders: [
         {
-          title: "示例",
-          value: "https://danmu1.example.com/token1\nhttps://danmu2.example.com/token2",
+          title: "示例danmu_api",
+          value: "https://{domain}/{token}",
         },
       ],
     },
   ],
   modules: [
     {
+      //id需固定为searchDanmu
       id: "searchDanmu",
       title: "搜索弹幕",
       functionName: "searchDanmu",
@@ -42,6 +43,7 @@ WidgetMetadata = {
       params: [],
     },
     {
+      //id需固定为getDetail
       id: "getDetail",
       title: "获取详情",
       functionName: "getDetailById",
@@ -49,6 +51,7 @@ WidgetMetadata = {
       params: [],
     },
     {
+      //id需固定为getComments
       id: "getComments",
       title: "获取弹幕",
       functionName: "getCommentsById",
@@ -58,53 +61,122 @@ WidgetMetadata = {
   ],
 };
 
-// ========================
-// 工具函数
-// ========================
+async function searchDanmu(params) {
+  const { tmdbId, type, title, season, link, videoUrl, server } = params;
 
-function convertChineseNumber(chineseNumber) {
-  if (/^\d+$/.test(chineseNumber)) {
-    return Number(chineseNumber);
-  }
+  let queryTitle = title;
 
-  const digits = {
-    '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-    '六': 6, '七': 7, '八': 8, '九': 9,
-    '壹': 1, '貳': 2, '參': 3, '肆': 4, '伍': 5,
-    '陸': 6, '柒': 7, '捌': 8, '玖': 9
-  };
-
-  const units = {
-    '十': 10, '百': 100, '千': 1000,
-    '拾': 10, '佰': 100, '仟': 1000
-  };
-
-  let result = 0;
-  let current = 0;
-  let lastUnit = 1;
-
-  for (let i = 0; i < chineseNumber.length; i++) {
-    const char = chineseNumber[i];
-    if (digits[char] !== undefined) {
-      current = digits[char];
-    } else if (units[char] !== undefined) {
-      const unit = units[char];
-      if (current === 0) current = 1;
-      if (unit >= lastUnit) {
-        result = current * unit;
-      } else {
-        result += current * unit;
+  // 解析多个服务器地址（用逗号分隔）
+  const servers = parseServers(server);
+  
+  // 同时从所有服务器搜索
+  const searchPromises = servers.map(serverUrl => 
+    Widget.http.get(
+      `${serverUrl}/api/v2/search/anime?keyword=${queryTitle}`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "ForwardWidgets/1.0.0",
+        },
       }
-      lastUnit = unit;
-      current = 0;
+    ).then(response => {
+      if (!response) return null;
+      
+      const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+      
+      // 检查API返回状态
+      if (!data.success) {
+        console.log(`服务器 ${serverUrl} 搜索失败: ${data.errorMessage || "未知错误"}`);
+        return null;
+      }
+      
+      // 为每个结果添加服务器标记
+      if (data.animes && data.animes.length > 0) {
+        data.animes.forEach(anime => {
+          anime._server = serverUrl; // 添加服务器标记
+        });
+      }
+      
+      return data;
+    }).catch(error => {
+      console.log(`服务器 ${serverUrl} 请求失败: ${error.message}`);
+      return null;
+    })
+  );
+
+  // 等待所有服务器响应
+  const results = await Promise.all(searchPromises);
+  
+  // 合并所有搜索结果
+  let allAnimes = [];
+  results.forEach((result, index) => {
+    if (result && result.animes && result.animes.length > 0) {
+      allAnimes = allAnimes.concat(result.animes);
+      console.log(`服务器 ${servers[index]} 返回 ${result.animes.length} 个结果`);
     }
+  });
+
+  console.log(`总共收到 ${allAnimes.length} 个搜索结果`);
+
+  // 如果没有搜索结果
+  if (allAnimes.length === 0) {
+    throw new Error("所有服务器均未找到相关弹幕");
   }
 
-  if (current > 0) {
-    result += current;
-  }
+  // 开始过滤数据
+  let animes = allAnimes;
+  if (season) {
+    // order by season
+    const matchedAnimes = [];
+    const nonMatchedAnimes = [];
 
-  return result;
+    animes.forEach((anime) => {
+      if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
+        matchedAnimes.push(anime);
+      } else {
+        nonMatchedAnimes.push(anime);
+      }
+    });
+
+    // Combine matched and non-matched animes, with matched ones at the front
+    animes = [...matchedAnimes, ...nonMatchedAnimes];
+  } else {
+    // order by type
+    const matchedAnimes = [];
+    const nonMatchedAnimes = [];
+
+    animes.forEach((anime) => {
+      if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
+        matchedAnimes.push(anime);
+      } else {
+        nonMatchedAnimes.push(anime);
+      }
+    });
+
+    // Combine matched and non-matched animes, with matched ones at the front
+    animes = [...matchedAnimes, ...nonMatchedAnimes];
+  }
+  
+  return {
+    animes: animes,
+  };
+}
+
+// 解析多个服务器地址
+function parseServers(serverInput) {
+  if (!serverInput) {
+    throw new Error("请配置至少一个服务器地址");
+  }
+  
+  // 按逗号分割服务器地址
+  const servers = serverInput.split(',').map(s => s.trim()).filter(s => s);
+  
+  if (servers.length === 0) {
+    throw new Error("请配置至少一个有效的服务器地址");
+  }
+  
+  console.log(`使用 ${servers.length} 个服务器:`, servers);
+  return servers;
 }
 
 function matchSeason(anime, queryTitle, season) {
@@ -118,10 +190,12 @@ function matchSeason(anime, queryTitle, season) {
       if (afterTitle === '' && season.toString() === "1") {
         res = true;
       }
+      // match number from afterTitle
       const seasonIndex = afterTitle.match(/\d+/);
       if (seasonIndex && seasonIndex[0].toString() === season.toString()) {
         res = true;
       }
+      // match chinese number
       const chineseNumber = afterTitle.match(/[一二三四五六七八九十壹贰叁肆伍陆柒捌玖拾]+/);
       if (chineseNumber && convertChineseNumber(chineseNumber[0]).toString() === season.toString()) {
         res = true;
@@ -132,93 +206,88 @@ function matchSeason(anime, queryTitle, season) {
   return res;
 }
 
-// ========================
-// 核心函数
-// ========================
-
-async function searchDanmu(params) {
-  const { tmdbId, type, title, season, link, videoUrl, server } = params;
-
-  const servers = (server || "")
-    .split(/[\n,]/)
-    .map(s => s.trim())
-    .filter(s => s);
-
-  const primaryServer = servers[0];
-  if (!primaryServer) {
-    throw new Error("未配置弹幕服务器地址");
+function convertChineseNumber(chineseNumber) {
+  // 如果是阿拉伯数字，直接转换
+  if (/^\d+$/.test(chineseNumber)) {
+    return Number(chineseNumber);
   }
 
-  const queryTitle = encodeURIComponent(title);
+  // 中文数字映射（简体+繁体）
+  const digits = {
+    // 简体
+    '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+    '六': 6, '七': 7, '八': 8, '九': 9,
+    // 繁体
+    '壹': 1, '貳': 2, '參': 3, '肆': 4, '伍': 5,
+    '陸': 6, '柒': 7, '捌': 8, '玖': 9
+  };
 
-  const response = await Widget.http.get(
-    `${primaryServer}/api/v2/search/anime?keyword=${queryTitle}`,
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0",
-      },
-    }
-  );
+  // 单位映射（简体+繁体）
+  const units = {
+    // 简体
+    '十': 10, '百': 100, '千': 1000,
+    // 繁体
+    '拾': 10, '佰': 100, '仟': 1000
+  };
 
-  if (!response) {
-    throw new Error("获取数据失败");
-  }
+  let result = 0;
+  let current = 0;
+  let lastUnit = 1;
 
-  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+  for (let i = 0; i < chineseNumber.length; i++) {
+    const char = chineseNumber[i];
 
-  if (!data.success) {
-    throw new Error(data.errorMessage || "API调用失败");
-  }
+    if (digits[char] !== undefined) {
+      // 数字
+      current = digits[char];
+    } else if (units[char] !== undefined) {
+      // 单位
+      const unit = units[char];
 
-  let animes = [];
-  if (data.animes && data.animes.length > 0) {
-    animes = data.animes;
-    if (season) {
-      const matchedAnimes = [];
-      const nonMatchedAnimes = [];
+      if (current === 0) current = 1;
 
-      animes.forEach((anime) => {
-        if (matchSeason(anime, title, season) && !(title.includes("电影") || title.includes("movie"))) {
-          matchedAnimes.push(anime);
-        } else {
-          nonMatchedAnimes.push(anime);
-        }
-      });
-      animes = [...matchedAnimes, ...nonMatchedAnimes];
-    } else {
-      const matchedAnimes = [];
-      const nonMatchedAnimes = [];
+      if (unit >= lastUnit) {
+        // 更大的单位，重置结果
+        result = current * unit;
+      } else {
+        // 更小的单位，累加到结果
+        result += current * unit;
+      }
 
-      animes.forEach((anime) => {
-        if (title.includes("电影") || title.includes("movie")) {
-          matchedAnimes.push(anime);
-        } else {
-          nonMatchedAnimes.push(anime);
-        }
-      });
-      animes = [...matchedAnimes, ...nonMatchedAnimes];
+      lastUnit = unit;
+      current = 0;
     }
   }
 
-  return { animes };
+  // 处理最后的个位数
+  if (current > 0) {
+    result += current;
+  }
+
+  return result;
 }
 
 async function getDetailById(params) {
   const { server, animeId } = params;
-
-  const servers = (server || "")
-    .split(/[\n,]/)
-    .map(s => s.trim())
-    .filter(s => s);
-
-  const primaryServer = servers[0];
-  if (!primaryServer) {
-    throw new Error("未配置弹幕服务器地址");
+  
+  // 解析多个服务器地址
+  const servers = parseServers(server);
+  
+  // 提取服务器地址和原始animeId（如果animeId包含服务器标记）
+  let targetServer = servers[0]; // 默认使用第一个服务器
+  let actualAnimeId = animeId;
+  
+  // 检查animeId是否包含服务器标记（格式：server|animeId）
+  if (animeId.includes('|')) {
+    const parts = animeId.split('|');
+    if (parts.length === 2) {
+      targetServer = parts[0];
+      actualAnimeId = parts[1];
+    }
   }
-
+  
   const response = await Widget.http.get(
-    `${primaryServer}/api/v2/bangumi/${animeId}`,
+    `${targetServer}/api/v2/bangumi/${actualAnimeId}`,
     {
       headers: {
         "Content-Type": "application/json",
@@ -228,78 +297,122 @@ async function getDetailById(params) {
   );
 
   if (!response) {
-    throw new Error("获取数据失败");
+    throw new Error(`从服务器 ${targetServer} 获取数据失败`);
   }
 
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+
+  console.log(data);
+
+  // 为每个剧集添加服务器标记
+  if (data.bangumi && data.bangumi.episodes) {
+    data.bangumi.episodes.forEach(episode => {
+      episode._server = targetServer;
+    });
+  }
 
   return data.bangumi.episodes;
 }
 
 async function getCommentsById(params) {
-  const { server, commentId } = params;
+  const { server, commentId, link, videoUrl, season, episode, tmdbId, type, title } = params;
 
   if (!commentId) {
     return null;
   }
 
-  const servers = (server || "")
-    .split(/[\n,]/)
-    .map(s => s.trim())
-    .filter(s => s);
-
-  if (servers.length === 0) {
-    throw new Error("未配置弹幕服务器地址");
+  // 解析多个服务器地址
+  const servers = parseServers(server);
+  
+  // 提取服务器地址和原始commentId（如果commentId包含服务器标记）
+  let targetServer = servers[0]; // 默认使用第一个服务器
+  let actualCommentId = commentId;
+  
+  // 检查commentId是否包含服务器标记（格式：server|commentId）
+  if (commentId.includes('|')) {
+    const parts = commentId.split('|');
+    if (parts.length === 2) {
+      targetServer = parts[0];
+      actualCommentId = parts[1];
+    }
   }
 
-  console.log(`[弹幕] 并行从 ${servers.length} 个服务器获取弹幕`);
+  // 从指定服务器获取弹幕
+  const response = await Widget.http.get(
+    `${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "ForwardWidgets/1.0.0",
+      },
+    }
+  );
 
-  const promises = servers.map(async (currentServer) => {
-    try {
-      const response = await Widget.http.get(
-        `${currentServer}/api/v2/comment/${commentId}?withRelated=true&chConvert=1`,
+  if (!response) {
+    throw new Error(`从服务器 ${targetServer} 获取弹幕失败`);
+  }
+
+  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+
+  // 同时尝试从其他服务器获取弹幕（作为备选）
+  const otherServers = servers.filter(s => s !== targetServer);
+  if (otherServers.length > 0) {
+    console.log(`尝试从 ${otherServers.length} 个其他服务器获取弹幕...`);
+    
+    const otherCommentsPromises = otherServers.map(otherServer => 
+      Widget.http.get(
+        `${otherServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
         {
           headers: {
             "Content-Type": "application/json",
             "User-Agent": "ForwardWidgets/1.0.0",
           },
         }
-      );
+      ).then(otherResponse => {
+        if (!otherResponse) return null;
+        
+        const otherData = typeof otherResponse.data === "string" ? JSON.parse(otherResponse.data) : otherResponse.data;
+        console.log(`服务器 ${otherServer} 返回弹幕数量: ${otherData.comments ? otherData.comments.length : 0}`);
+        return {
+          server: otherServer,
+          data: otherData
+        };
+      }).catch(error => {
+        console.log(`服务器 ${otherServer} 获取弹幕失败: ${error.message}`);
+        return null;
+      })
+    );
 
-      if (!response) return [];
-
-      const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-      return Array.isArray(data?.comments) ? data.comments : [];
-    } catch (error) {
-      console.warn(`[弹幕] 服务器 ${currentServer} 请求失败:`, error.message);
-      return [];
+    const otherCommentsResults = await Promise.all(otherCommentsPromises);
+    
+    // 合并所有服务器的弹幕（去重）
+    const allComments = [...(data.comments || [])];
+    const seenComments = new Set();
+    
+    // 添加主服务器的弹幕到集合
+    data.comments?.forEach(comment => {
+      seenComments.add(JSON.stringify(comment));
+    });
+    
+    // 添加其他服务器的弹幕
+    otherCommentsResults.forEach(result => {
+      if (result && result.data && result.data.comments) {
+        result.data.comments.forEach(comment => {
+          const commentStr = JSON.stringify(comment);
+          if (!seenComments.has(commentStr)) {
+            allComments.push(comment);
+            seenComments.add(commentStr);
+          }
+        });
+      }
+    });
+    
+    // 更新弹幕列表
+    if (allComments.length > 0) {
+      data.comments = allComments;
+      console.log(`合并后弹幕总数: ${allComments.length}`);
     }
-  });
-
-  const allCommentsArrays = await Promise.all(promises);
-
-  let mergedComments = [];
-  for (const comments of allCommentsArrays) {
-    mergedComments = mergedComments.concat(comments);
   }
 
-  // 去重：基于 content + time（保留一位小数精度）
-  const seen = new Set();
-  mergedComments = mergedComments.filter(comment => {
-    const key = `${comment.content}|${Math.round(comment.time * 100)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  // 按时间排序
-  mergedComments.sort((a, b) => a.time - b.time);
-
-  console.log(`[弹幕] 合并完成，共 ${mergedComments.length} 条`);
-
-  return {
-    success: true,
-    comments: mergedComments,
-    count: mergedComments.length,
-  };
+  return data;
 }
