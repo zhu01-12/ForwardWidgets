@@ -337,7 +337,7 @@ async function getCommentsById(params) {
     }
   }
 
-  // 从指定服务器获取弹幕
+  // 只从指定服务器获取弹幕，不合并其他服务器的弹幕
   const response = await Widget.http.get(
     `${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
     {
@@ -354,65 +354,7 @@ async function getCommentsById(params) {
 
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
 
-  // 同时尝试从其他服务器获取弹幕（作为备选）
-  const otherServers = servers.filter(s => s !== targetServer);
-  if (otherServers.length > 0) {
-    console.log(`尝试从 ${otherServers.length} 个其他服务器获取弹幕...`);
-    
-    const otherCommentsPromises = otherServers.map(otherServer => 
-      Widget.http.get(
-        `${otherServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": "ForwardWidgets/1.0.0",
-          },
-        }
-      ).then(otherResponse => {
-        if (!otherResponse) return null;
-        
-        const otherData = typeof otherResponse.data === "string" ? JSON.parse(otherResponse.data) : otherResponse.data;
-        console.log(`服务器 ${otherServer} 返回弹幕数量: ${otherData.comments ? otherData.comments.length : 0}`);
-        return {
-          server: otherServer,
-          data: otherData
-        };
-      }).catch(error => {
-        console.log(`服务器 ${otherServer} 获取弹幕失败: ${error.message}`);
-        return null;
-      })
-    );
-
-    const otherCommentsResults = await Promise.all(otherCommentsPromises);
-    
-    // 合并所有服务器的弹幕（去重）
-    const allComments = [...(data.comments || [])];
-    const seenComments = new Set();
-    
-    // 添加主服务器的弹幕到集合
-    data.comments?.forEach(comment => {
-      seenComments.add(JSON.stringify(comment));
-    });
-    
-    // 添加其他服务器的弹幕
-    otherCommentsResults.forEach(result => {
-      if (result && result.data && result.data.comments) {
-        result.data.comments.forEach(comment => {
-          const commentStr = JSON.stringify(comment);
-          if (!seenComments.has(commentStr)) {
-            allComments.push(comment);
-            seenComments.add(commentStr);
-          }
-        });
-      }
-    });
-    
-    // 更新弹幕列表
-    if (allComments.length > 0) {
-      data.comments = allComments;
-      console.log(`合并后弹幕总数: ${allComments.length}`);
-    }
-  }
+  console.log(`服务器 ${targetServer} 返回弹幕数量: ${data.comments ? data.comments.length : 0}`);
 
   return data;
 }
