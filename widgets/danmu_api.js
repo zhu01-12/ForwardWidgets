@@ -72,7 +72,7 @@ async function searchDanmu(params) {
   // 同时从所有服务器搜索
   const searchPromises = servers.map(serverUrl => 
     Widget.http.get(
-      `${serverUrl}/api/v2/search/anime?keyword=${queryTitle}`,
+      `${serverUrl}/api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`,
       {
         headers: {
           "Content-Type": "application/json",
@@ -80,9 +80,18 @@ async function searchDanmu(params) {
         },
       }
     ).then(response => {
-      if (!response) return null;
+      if (!response) {
+        console.log(`服务器 ${serverUrl} 返回空响应`);
+        return null;
+      }
       
-      const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+      let data;
+      try {
+        data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+      } catch (error) {
+        console.log(`服务器 ${serverUrl} 返回的数据解析失败:`, error);
+        return null;
+      }
       
       // 检查API返回状态
       if (!data.success) {
@@ -90,10 +99,11 @@ async function searchDanmu(params) {
         return null;
       }
       
-      // 为每个结果添加服务器标记
+      // 为每个结果添加服务器标记和完整服务器信息
       if (data.animes && data.animes.length > 0) {
         data.animes.forEach(anime => {
           anime._server = serverUrl; // 添加服务器标记
+          anime._fullServer = serverUrl; // 保存完整的服务器地址
         });
       }
       
@@ -105,14 +115,19 @@ async function searchDanmu(params) {
   );
 
   // 等待所有服务器响应
-  const results = await Promise.all(searchPromises);
+  const results = await Promise.allSettled(searchPromises);
   
   // 合并所有搜索结果
   let allAnimes = [];
   results.forEach((result, index) => {
-    if (result && result.animes && result.animes.length > 0) {
-      allAnimes = allAnimes.concat(result.animes);
-      console.log(`服务器 ${servers[index]} 返回 ${result.animes.length} 个结果`);
+    if (result.status === 'fulfilled' && result.value) {
+      const data = result.value;
+      if (data.animes && data.animes.length > 0) {
+        allAnimes = allAnimes.concat(data.animes);
+        console.log(`服务器 ${servers[index]} 返回 ${data.animes.length} 个结果`);
+      }
+    } else {
+      console.log(`服务器 ${servers[index]} 请求失败或返回无效数据`);
     }
   });
 
@@ -182,7 +197,7 @@ function parseServers(serverInput) {
 function matchSeason(anime, queryTitle, season) {
   console.log("start matchSeason: ", anime.animeTitle, queryTitle, season);
   let res = false;
-  if (anime.animeTitle.includes(queryTitle)) {
+  if (anime.animeTitle && anime.animeTitle.includes(queryTitle)) {
     const title = anime.animeTitle.split("(")[0].trim();
     if (title.startsWith(queryTitle)) {
       const afterTitle = title.substring(queryTitle.length).trim();
@@ -270,10 +285,12 @@ function convertChineseNumber(chineseNumber) {
 async function getDetailById(params) {
   const { server, animeId } = params;
   
+  console.log("getDetailById params:", params);
+  
   // 解析多个服务器地址
   const servers = parseServers(server);
   
-  // 提取服务器地址和原始animeId（如果animeId包含服务器标记）
+  // 提取服务器地址和原始animeId
   let targetServer = servers[0]; // 默认使用第一个服务器
   let actualAnimeId = animeId;
   
@@ -283,78 +300,130 @@ async function getDetailById(params) {
     if (parts.length === 2) {
       targetServer = parts[0];
       actualAnimeId = parts[1];
+      console.log(`解析出服务器: ${targetServer}, animeId: ${actualAnimeId}`);
     }
+  } else {
+    // 如果没有服务器标记，尝试从server参数中获取第一个服务器
+    console.log(`animeId不包含服务器标记，使用默认服务器: ${targetServer}`);
   }
   
-  const response = await Widget.http.get(
-    `${targetServer}/api/v2/bangumi/${actualAnimeId}`,
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0",
-      },
+  console.log(`请求详情: ${targetServer}/api/v2/bangumi/${actualAnimeId}`);
+  
+  try {
+    const response = await Widget.http.get(
+      `${targetServer}/api/v2/bangumi/${actualAnimeId}`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "ForwardWidgets/1.0.0",
+        },
+      }
+    );
+
+    if (!response) {
+      throw new Error(`从服务器 ${targetServer} 获取数据失败: 响应为空`);
     }
-  );
 
-  if (!response) {
-    throw new Error(`从服务器 ${targetServer} 获取数据失败`);
+    let data;
+    try {
+      data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+    } catch (error) {
+      throw new Error(`从服务器 ${targetServer} 获取的数据解析失败: ${error.message}`);
+    }
+
+    console.log("getDetailById 返回数据:", data);
+
+    if (!data.bangumi || !data.bangumi.episodes) {
+      throw new Error(`服务器 ${targetServer} 返回的数据结构不正确`);
+    }
+
+    // 为每个剧集添加服务器标记和完整服务器信息
+    if (data.bangumi.episodes) {
+      data.bangumi.episodes.forEach(episode => {
+        episode._server = targetServer;
+        // 修改commentId，添加服务器前缀，确保后续能正确获取弹幕
+        if (episode.commentId) {
+          // 保存原始commentId
+          episode._originalCommentId = episode.commentId;
+          // 创建带服务器标记的commentId
+          episode.commentId = `${targetServer}|${episode.commentId}`;
+        }
+      });
+    }
+
+    return data.bangumi.episodes;
+  } catch (error) {
+    console.error(`从服务器 ${targetServer} 获取详情失败:`, error);
+    throw new Error(`获取详情失败: ${error.message}`);
   }
-
-  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-  console.log(data);
-
-  // 为每个剧集添加服务器标记
-  if (data.bangumi && data.bangumi.episodes) {
-    data.bangumi.episodes.forEach(episode => {
-      episode._server = targetServer;
-    });
-  }
-
-  return data.bangumi.episodes;
 }
 
 async function getCommentsById(params) {
   const { server, commentId, link, videoUrl, season, episode, tmdbId, type, title } = params;
 
+  console.log("getCommentsById params:", params);
+
   if (!commentId) {
+    console.log("commentId为空，无法获取弹幕");
     return null;
   }
 
   // 解析多个服务器地址
   const servers = parseServers(server);
   
-  // 提取服务器地址和原始commentId（如果commentId包含服务器标记）
+  // 提取服务器地址和原始commentId
   let targetServer = servers[0]; // 默认使用第一个服务器
   let actualCommentId = commentId;
   
   // 检查commentId是否包含服务器标记（格式：server|commentId）
   if (commentId.includes('|')) {
     const parts = commentId.split('|');
-    if (parts.length === 2) {
+    if (parts.length >= 2) {
+      // 提取服务器地址
       targetServer = parts[0];
-      actualCommentId = parts[1];
+      // 提取实际的commentId（可能是剩下的部分）
+      actualCommentId = parts.slice(1).join('|');
+      console.log(`解析出服务器: ${targetServer}, commentId: ${actualCommentId}`);
     }
+  } else {
+    // 如果没有服务器标记，尝试从server参数中获取第一个服务器
+    console.log(`commentId不包含服务器标记，使用默认服务器: ${targetServer}, commentId: ${actualCommentId}`);
   }
 
-  // 只从指定服务器获取弹幕，不合并其他服务器的弹幕
-  const response = await Widget.http.get(
-    `${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0",
-      },
+  console.log(`请求弹幕: ${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`);
+
+  try {
+    // 只从指定服务器获取弹幕，不合并其他服务器的弹幕
+    const response = await Widget.http.get(
+      `${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "ForwardWidgets/1.0.0",
+        },
+      }
+    );
+
+    if (!response) {
+      throw new Error(`从服务器 ${targetServer} 获取弹幕失败: 响应为空`);
     }
-  );
 
-  if (!response) {
-    throw new Error(`从服务器 ${targetServer} 获取弹幕失败`);
+    let data;
+    try {
+      data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+    } catch (error) {
+      throw new Error(`从服务器 ${targetServer} 获取的弹幕数据解析失败: ${error.message}`);
+    }
+
+    console.log(`服务器 ${targetServer} 返回弹幕数量: ${data.comments ? data.comments.length : 0}`);
+    
+    if (!data.comments || data.comments.length === 0) {
+      console.log(`服务器 ${targetServer} 返回的弹幕列表为空`);
+    }
+
+    return data;
+  } catch (error) {
+    console.error(`从服务器 ${targetServer} 获取弹幕失败:`, error);
+    throw new Error(`获取弹幕失败: ${error.message}`);
   }
-
-  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-  console.log(`服务器 ${targetServer} 返回弹幕数量: ${data.comments ? data.comments.length : 0}`);
-
-  return data;
 }
