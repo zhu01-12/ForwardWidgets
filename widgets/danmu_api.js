@@ -1,5 +1,5 @@
 /**
- * 弹幕示例模块 - 多服务器版
+ * 弹幕示例模块
  * 给 module 指定 type 为 danmu 后，默认会携带以下参数：
  * tmdbId: TMDB ID，Optional
  * type: 类型，tv | movie
@@ -14,41 +14,34 @@
  */
 WidgetMetadata = {
   id: "forward.auto.danmu_api",
-  title: "LogVar (多服务器)",
-  version: "5.3.0",
+  title: "LogVar",
+  version: "5.2.0",
   requiredVersion: "0.0.2",
-  description: "从多个LogVar服务器获取弹幕",
+  description: "从LogVar获取弹幕",
   author: "小振ℓινє",
   site: "https://github.com/huangxd-/ForwardWidgets",
   globalParams: [
     {
-      name: "servers",
-      title: "弹幕服务器列表(每行一个)",
-      type: "textarea",
+      name: "primaryServer",
+      title: "主服务器地址",
+      type: "input",
       placeholders: [
         {
-          title: "示例",
-          value: "https://api.dandanplay.net\nhttps://danmu.example.com",
+          title: "示例：https://api.example1.com",
+          value: "https://api.example1.com",
         },
       ],
     },
     {
-      name: "timeout",
-      title: "请求超时(毫秒)",
+      name: "secondaryServer",
+      title: "备用服务器地址",
       type: "input",
-      placeholders: [{ title: "默认3000", value: "3000" }],
-    },
-    {
-      name: "retryCount",
-      title: "重试次数",
-      type: "input",
-      placeholders: [{ title: "默认2", value: "2" }],
-    },
-    {
-      name: "enableHealthCheck",
-      title: "启用健康检查",
-      type: "checkbox",
-      default: true,
+      placeholders: [
+        {
+          title: "示例：https://api.example2.com",
+          value: "https://api.example2.com",
+        },
+      ],
     },
   ],
   modules: [
@@ -79,262 +72,151 @@ WidgetMetadata = {
   ],
 };
 
-// 服务器健康状态缓存
-let serverCache = {
-  servers: [],
-  healthStatus: {}, // {server: {success: 0, fail: 0, responseTime: [], lastCheck: timestamp}}
-  lastUpdate: 0
-};
-
-/**
- * 健康检查函数
- * @param {string} server - 服务器地址
- * @returns {Promise<boolean>} 是否健康
- */
-async function healthCheck(server) {
-  try {
-    const startTime = Date.now();
-    const response = await Widget.http.get(`${server}/api/v2/search/anime?keyword=test`, {
-      timeout: 3000,
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0",
-      },
-    });
-    const responseTime = Date.now() - startTime;
-    
-    // 更新健康状态
-    if (serverCache.healthStatus[server]) {
-      serverCache.healthStatus[server].success++;
-      serverCache.healthStatus[server].responseTime.push(responseTime);
-      serverCache.healthStatus[server].lastCheck = Date.now();
-      // 保留最近10次响应时间
-      if (serverCache.healthStatus[server].responseTime.length > 10) {
-        serverCache.healthStatus[server].responseTime.shift();
-      }
-    } else {
-      serverCache.healthStatus[server] = {
-        success: 1,
-        fail: 0,
-        responseTime: [responseTime],
-        lastCheck: Date.now()
-      };
-    }
-    
-    console.log(`服务器 ${server} 健康检查通过，响应时间: ${responseTime}ms`);
-    return true;
-  } catch (error) {
-    console.log(`服务器 ${server} 健康检查失败: ${error.message}`);
-    if (serverCache.healthStatus[server]) {
-      serverCache.healthStatus[server].fail++;
-      serverCache.healthStatus[server].lastCheck = Date.now();
-    } else {
-      serverCache.healthStatus[server] = {
-        success: 0,
-        fail: 1,
-        responseTime: [],
-        lastCheck: Date.now()
-      };
-    }
-    return false;
-  }
-}
-
-/**
- * 批量健康检查
- * @param {string[]} serverList - 服务器列表
- */
-async function batchHealthCheck(serverList) {
-  const now = Date.now();
-  // 10分钟内只检查一次
-  if (now - serverCache.lastUpdate < 10 * 60 * 1000) {
-    return;
-  }
+// 同时向多个服务器发起请求，使用最先返回的结果
+async function raceMultipleServers(requestFunc, params, serverParamNames) {
+  const promises = [];
+  const servers = [];
   
-  console.log("开始批量健康检查...");
-  const promises = serverList.map(server => healthCheck(server));
-  await Promise.allSettled(promises);
-  serverCache.lastUpdate = now;
-}
-
-/**
- * 获取服务器评分
- * @param {string} server - 服务器地址
- * @returns {number} 评分
- */
-function getServerScore(server) {
-  const stats = serverCache.healthStatus[server];
-  if (!stats) return 0;
-  
-  const totalRequests = stats.success + stats.fail;
-  if (totalRequests === 0) return 0.5; // 默认中等评分
-  
-  const successRate = stats.success / totalRequests;
-  
-  // 计算平均响应时间
-  let avgResponseTime = 1000; // 默认值
-  if (stats.responseTime.length > 0) {
-    avgResponseTime = stats.responseTime.reduce((a, b) => a + b, 0) / stats.responseTime.length;
-  }
-  
-  // 综合评分：成功率权重0.6，响应时间权重0.3，新鲜度权重0.1
-  const freshness = Math.max(0, 1 - (Date.now() - stats.lastCheck) / (30 * 60 * 1000)); // 30分钟新鲜度
-  
-  const score = (successRate * 0.6) + 
-                (1000 / (avgResponseTime + 100)) * 0.3 + 
-                freshness * 0.1;
-  
-  return Math.max(0, Math.min(1, score)); // 确保在0-1之间
-}
-
-/**
- * 获取最佳服务器
- * @param {string} servers - 服务器列表字符串
- * @returns {string|null} 最佳服务器地址
- */
-function getBestServer(servers) {
-  const serverList = servers.split('\n')
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-  
-  if (serverList.length === 0) return null;
-  
-  // 计算每个服务器的评分
-  const scoredServers = serverList.map(server => ({
-    server,
-    score: getServerScore(server)
-  }));
-  
-  // 按分数降序排序
-  scoredServers.sort((a, b) => b.score - a.score);
-  
-  console.log("服务器评分:", scoredServers);
-  return scoredServers[0].server;
-}
-
-/**
- * 顺序尝试多个服务器
- * @param {string} servers - 服务器列表字符串
- * @param {Function} requestFunc - 请求函数
- * @param {Object} params - 参数
- * @returns {Promise<Object>} 结果
- */
-async function tryMultipleServers(servers, requestFunc, params) {
-  const serverList = servers.split('\n')
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-  
-  if (serverList.length === 0) {
-    throw new Error("未配置服务器地址");
-  }
-  
-  const timeout = parseInt(params.timeout) || 3000;
-  const retryCount = parseInt(params.retryCount) || 2;
-  const enableHealthCheck = params.enableHealthCheck !== false;
-  
-  // 如果需要健康检查，先进行批量检查
-  if (enableHealthCheck) {
-    await batchHealthCheck(serverList);
-  }
-  
-  let bestServer = null;
-  let otherServers = [...serverList];
-  
-  // 如果有健康检查数据，优先选择最佳服务器
-  if (enableHealthCheck && Object.keys(serverCache.healthStatus).length > 0) {
-    bestServer = getBestServer(servers);
-    if (bestServer) {
-      otherServers = serverList.filter(s => s !== bestServer);
-      console.log(`优先使用最佳服务器: ${bestServer}`);
+  // 收集所有有效的服务器
+  for (const serverParamName of serverParamNames) {
+    const server = params[serverParamName];
+    if (server && server.trim() !== '') {
+      servers.push(server);
     }
   }
   
-  // 如果找到了最佳服务器，先尝试它
-  if (bestServer) {
-    try {
-      const result = await executeRequest(bestServer, requestFunc, params, timeout, retryCount);
-      return {
-        data: result,
-        server: bestServer,
-        fromCache: false
-      };
-    } catch (error) {
-      console.log(`最佳服务器 ${bestServer} 失败，尝试其他服务器: ${error.message}`);
-    }
+  if (servers.length === 0) {
+    throw new Error('没有可用的服务器地址');
   }
   
-  // 尝试其他服务器
-  let lastError = null;
-  for (const server of otherServers) {
-    try {
-      const result = await executeRequest(server, requestFunc, params, timeout, retryCount);
-      return {
-        data: result,
+  // 为每个服务器创建请求Promise
+  for (const server of servers) {
+    const promise = requestFunc(server, params)
+      .then(result => ({
+        success: true,
         server: server,
-        fromCache: false
-      };
-    } catch (error) {
-      console.log(`服务器 ${server} 失败: ${error.message}`);
-      lastError = error;
+        data: result,
+        error: null
+      }))
+      .catch(error => ({
+        success: false,
+        server: server,
+        data: null,
+        error: error
+      }));
+    
+    promises.push(promise);
+  }
+  
+  // 等待第一个成功的响应
+  let firstSuccess = null;
+  let allErrors = [];
+  
+  const results = await Promise.allSettled(promises);
+  
+  // 首先检查成功的响应
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.success) {
+      firstSuccess = result.value;
+      break;
+    } else if (result.status === 'fulfilled' && !result.value.success) {
+      allErrors.push({
+        server: result.value.server,
+        error: result.value.error
+      });
     }
   }
   
-  throw new Error(`所有服务器都失败: ${lastError ? lastError.message : '未知错误'}`);
+  if (firstSuccess) {
+    console.log(`使用服务器 ${firstSuccess.server} 的响应`);
+    return firstSuccess.data;
+  }
+  
+  // 如果没有成功响应，抛出所有错误
+  if (allErrors.length > 0) {
+    const errorMessages = allErrors.map(err => `${err.server}: ${err.error.message}`).join('; ');
+    throw new Error(`所有服务器请求失败: ${errorMessages}`);
+  }
+  
+  throw new Error('未知错误');
 }
 
-/**
- * 执行请求（带重试）
- * @param {string} server - 服务器地址
- * @param {Function} requestFunc - 请求函数
- * @param {Object} params - 参数
- * @param {number} timeout - 超时时间
- * @param {number} retryCount - 重试次数
- * @returns {Promise<any>} 结果
- */
-async function executeRequest(server, requestFunc, params, timeout, retryCount) {
-  for (let retry = 0; retry <= retryCount; retry++) {
-    try {
-      console.log(`尝试服务器 ${server} (第${retry + 1}次)`);
+// 备选方案：使用Promise.race但处理失败
+async function raceServersWithTimeout(requestFunc, params, serverParamNames) {
+  const servers = [];
+  
+  // 收集所有有效的服务器
+  for (const serverParamName of serverParamNames) {
+    const server = params[serverParamName];
+    if (server && server.trim() !== '') {
+      servers.push(server);
+    }
+  }
+  
+  if (servers.length === 0) {
+    throw new Error('没有可用的服务器地址');
+  }
+  
+  // 为每个服务器创建带有超时的请求Promise
+  const requests = servers.map(server => {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`服务器 ${server} 请求超时`));
+      }, 8000); // 8秒超时
       
-      // 创建超时Promise
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error(`请求超时 (${timeout}ms)`)), timeout);
-      });
-      
-      // 执行实际请求
-      const response = await Promise.race([
-        requestFunc(server, params),
-        timeoutPromise
-      ]);
-      
-      console.log(`服务器 ${server} 请求成功`);
-      return response;
-      
-    } catch (error) {
-      console.log(`服务器 ${server} 失败 (第${retry + 1}次): ${error.message}`);
-      
-      // 如果不是最后一次重试，等待一段时间再试
-      if (retry < retryCount) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // 等待500ms
-      } else {
-        throw error; // 最后一次重试失败，抛出错误
+      requestFunc(server, params)
+        .then(result => {
+          clearTimeout(timeout);
+          resolve({
+            server: server,
+            data: result
+          });
+        })
+        .catch(error => {
+          clearTimeout(timeout);
+          reject(new Error(`服务器 ${server} 失败: ${error.message}`));
+        });
+    });
+  });
+  
+  // 使用Promise.race获取最快响应的服务器
+  try {
+    const fastestResult = await Promise.race(requests);
+    console.log(`最快响应来自服务器: ${fastestResult.server}`);
+    return fastestResult.data;
+  } catch (error) {
+    // 如果最快的请求失败了，尝试其他的
+    console.log(`最快请求失败: ${error.message}`);
+    
+    // 等待所有请求完成，看是否有成功的
+    const allResults = await Promise.allSettled(requests);
+    
+    for (const result of allResults) {
+      if (result.status === 'fulfilled') {
+        console.log(`使用备选服务器: ${result.value.server}`);
+        return result.value.data;
       }
     }
+    
+    // 如果所有都失败了，抛出错误
+    const errors = allResults
+      .filter(r => r.status === 'rejected')
+      .map(r => r.reason.message)
+      .join('; ');
+    
+    throw new Error(`所有服务器都失败: ${errors}`);
   }
 }
 
-/**
- * 搜索弹幕
- * @param {Object} params - 参数
- * @returns {Promise<Object>} 搜索结果
- */
 async function searchDanmu(params) {
-  const { servers, tmdbId, type, title, season, link, videoUrl } = params;
-  
-  const result = await tryMultipleServers(servers, async (server) => {
-    let queryTitle = title;
-    
-    // 调用弹弹play搜索API
+  const { tmdbId, type, title, season, link, videoUrl, primaryServer, secondaryServer } = params;
+
+  let queryTitle = title;
+
+  // 定义请求函数
+  const searchRequest = async (server, params) => {
+    const { queryTitle } = params;
+    // 调用弹弹play搜索API - 使用Widget.http.get
     const response = await Widget.http.get(
       `${server}/api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`,
       {
@@ -342,6 +224,7 @@ async function searchDanmu(params) {
           "Content-Type": "application/json",
           "User-Agent": "ForwardWidgets/1.0.0",
         },
+        timeout: 10000, // 10秒超时
       }
     );
 
@@ -351,58 +234,62 @@ async function searchDanmu(params) {
 
     const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
 
-    console.log(`搜索响应来自 ${server}:`, data);
+    console.log(`从服务器 ${server} 获取数据:`, data);
 
     // 检查API返回状态
     if (!data.success) {
       throw new Error(data.errorMessage || "API调用失败");
     }
 
-    // 开始过滤数据
-    let animes = [];
-    if (data.animes && data.animes.length > 0) {
-      animes = data.animes;
-      if (season) {
-        // order by season
-        const matchedAnimes = [];
-        const nonMatchedAnimes = [];
+    return data;
+  };
 
-        animes.forEach((anime) => {
-          if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
-              matchedAnimes.push(anime);
-          } else {
-              nonMatchedAnimes.push(anime);
-          }
-        });
+  // 同时向多个服务器发起请求，使用最快的响应
+  const data = await raceServersWithTimeout(searchRequest, 
+    { ...params, queryTitle }, 
+    ['primaryServer', 'secondaryServer']);
 
-        // Combine matched and non-matched animes, with matched ones at the front
-        animes = [...matchedAnimes, ...nonMatchedAnimes];
-      } else {
-        // order by type
-        const matchedAnimes = [];
-        const nonMatchedAnimes = [];
+  // 开始过滤数据
+  let animes = [];
+  if (data.animes && data.animes.length > 0) {
+    animes = data.animes;
+    if (season) {
+      // order by season
+      const matchedAnimes = [];
+      const nonMatchedAnimes = [];
 
-        animes.forEach((anime) => {
-          if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
-              matchedAnimes.push(anime);
-          } else {
-              nonMatchedAnimes.push(anime);
-          }
-        });
+      animes.forEach((anime) => {
+        if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
+          matchedAnimes.push(anime);
+        } else {
+          nonMatchedAnimes.push(anime);
+        }
+      });
 
-        // Combine matched and non-matched animes, with matched ones at the front
-        animes = [...matchedAnimes, ...nonMatchedAnimes];
-      }
+      // Combine matched and non-matched animes, with matched ones at the front
+      animes = [...matchedAnimes, ...nonMatchedAnimes];
+    } else {
+      // order by type
+      const matchedAnimes = [];
+      const nonMatchedAnimes = [];
+
+      animes.forEach((anime) => {
+        if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
+          matchedAnimes.push(anime);
+        } else {
+          nonMatchedAnimes.push(anime);
+        }
+      });
+
+      // Combine matched and non-matched animes, with matched ones at the front
+      animes = [...matchedAnimes, ...nonMatchedAnimes];
     }
-    return { animes: animes, _fromServer: server };
-  }, params);
-
-  return result.data;
+  }
+  return {
+    animes: animes,
+  };
 }
 
-/**
- * 匹配季数
- */
 function matchSeason(anime, queryTitle, season) {
   console.log("start matchSeason: ", anime.animeTitle, queryTitle, season);
   let res = false;
@@ -430,9 +317,6 @@ function matchSeason(anime, queryTitle, season) {
   return res;
 }
 
-/**
- * 转换中文数字
- */
 function convertChineseNumber(chineseNumber) {
   // 如果是阿拉伯数字，直接转换
   if (/^\d+$/.test(chineseNumber)) {
@@ -494,15 +378,12 @@ function convertChineseNumber(chineseNumber) {
   return result;
 }
 
-/**
- * 获取详情
- * @param {Object} params - 参数
- * @returns {Promise<Object>} 详情数据
- */
 async function getDetailById(params) {
-  const { servers, animeId } = params;
+  const { animeId, primaryServer, secondaryServer } = params;
   
-  const result = await tryMultipleServers(servers, async (server) => {
+  // 定义请求函数
+  const detailRequest = async (server, params) => {
+    const { animeId } = params;
     const response = await Widget.http.get(
       `${server}/api/v2/bangumi/${animeId}`,
       {
@@ -510,6 +391,7 @@ async function getDetailById(params) {
           "Content-Type": "application/json",
           "User-Agent": "ForwardWidgets/1.0.0",
         },
+        timeout: 10000, // 10秒超时
       }
     );
 
@@ -519,24 +401,25 @@ async function getDetailById(params) {
 
     const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
 
-    console.log(`详情响应来自 ${server}:`, data);
+    console.log(`从服务器 ${server} 获取详情数据:`, data);
 
-    return data.bangumi.episodes;
-  }, params);
+    return data;
+  };
 
-  return result.data;
+  // 同时向多个服务器发起请求，使用最快的响应
+  const data = await raceServersWithTimeout(detailRequest, params, ['primaryServer', 'secondaryServer']);
+
+  return data.bangumi.episodes;
 }
 
-/**
- * 获取弹幕
- * @param {Object} params - 参数
- * @returns {Promise<Object>} 弹幕数据
- */
 async function getCommentsById(params) {
-  const { servers, commentId, link, videoUrl, season, episode, tmdbId, type, title } = params;
+  const { commentId, link, videoUrl, season, episode, tmdbId, type, title, primaryServer, secondaryServer } = params;
 
   if (commentId) {
-    const result = await tryMultipleServers(servers, async (server) => {
+    // 定义请求函数
+    const commentsRequest = async (server, params) => {
+      const { commentId } = params;
+      // 调用弹弹play弹幕API - 使用Widget.http.get
       const response = await Widget.http.get(
         `${server}/api/v2/comment/${commentId}?withRelated=true&chConvert=1`,
         {
@@ -544,6 +427,7 @@ async function getCommentsById(params) {
             "Content-Type": "application/json",
             "User-Agent": "ForwardWidgets/1.0.0",
           },
+          timeout: 10000, // 10秒超时
         }
       );
 
@@ -553,68 +437,15 @@ async function getCommentsById(params) {
 
       const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
 
-      console.log(`弹幕响应来自 ${server}:`, data);
+      console.log(`从服务器 ${server} 获取弹幕数据:`, data);
 
       return data;
-    }, params);
+    };
 
-    return result.data;
-  }
-  
-  // 如果没有commentId，尝试从视频链接匹配
-  if (videoUrl) {
-    return await searchCommentsByVideoUrl(servers, videoUrl, params);
-  }
-  
-  return null;
-}
-
-/**
- * 根据视频链接搜索弹幕
- */
-async function searchCommentsByVideoUrl(servers, videoUrl, params) {
-  const result = await tryMultipleServers(servers, async (server) => {
-    // 从视频链接提取特征，比如文件名等
-    const filename = videoUrl.split('/').pop().split('?')[0];
-    
-    const response = await Widget.http.get(
-      `${server}/api/v2/search/video?filename=${encodeURIComponent(filename)}`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "ForwardWidgets/1.0.0",
-        },
-      }
-    );
-
-    if (!response) {
-      throw new Error("获取数据失败");
-    }
-
-    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-    
-    console.log(`视频搜索响应来自 ${server}:`, data);
+    // 同时向多个服务器发起请求，使用最快的响应
+    const data = await raceServersWithTimeout(commentsRequest, params, ['primaryServer', 'secondaryServer']);
     
     return data;
-  }, params);
-
-  return result.data;
+  }
+  return null;
 }
-
-/**
- * 清理服务器健康状态
- */
-function cleanupServerCache() {
-  const now = Date.now();
-  const thirtyMinutes = 30 * 60 * 1000;
-  
-  Object.keys(serverCache.healthStatus).forEach(server => {
-    const status = serverCache.healthStatus[server];
-    if (now - status.lastCheck > thirtyMinutes) {
-      delete serverCache.healthStatus[server];
-    }
-  });
-}
-
-// 初始化时清理过期的缓存
-cleanupServerCache();
