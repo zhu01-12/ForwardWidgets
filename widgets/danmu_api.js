@@ -65,6 +65,7 @@ async function searchDanmu(params) {
   const { tmdbId, type, title, season, link, videoUrl, server } = params;
 
   let queryTitle = title;
+  console.log(`搜索弹幕: queryTitle=${queryTitle}, server=${server}`);
 
   // 解析多个服务器地址（用逗号分隔）
   const servers = parseServers(server);
@@ -103,7 +104,8 @@ async function searchDanmu(params) {
       if (data.animes && data.animes.length > 0) {
         data.animes.forEach(anime => {
           anime._server = serverUrl; // 添加服务器标记
-          anime._fullServer = serverUrl; // 保存完整的服务器地址
+          // 创建一个组合的ID，包含服务器信息和原始ID
+          anime._combinedId = `${serverUrl}|${anime.animeId}`;
         });
       }
       
@@ -297,9 +299,11 @@ async function getDetailById(params) {
   // 检查animeId是否包含服务器标记（格式：server|animeId）
   if (animeId.includes('|')) {
     const parts = animeId.split('|');
-    if (parts.length === 2) {
+    if (parts.length >= 2) {
+      // 提取服务器地址（第一个部分）
       targetServer = parts[0];
-      actualAnimeId = parts[1];
+      // 提取实际的animeId（剩下的部分）
+      actualAnimeId = parts.slice(1).join('|');
       console.log(`解析出服务器: ${targetServer}, animeId: ${actualAnimeId}`);
     }
   } else {
@@ -334,27 +338,28 @@ async function getDetailById(params) {
     console.log("getDetailById 返回数据:", data);
 
     if (!data.bangumi || !data.bangumi.episodes) {
-      throw new Error(`服务器 ${targetServer} 返回的数据结构不正确`);
+      console.warn(`服务器 ${targetServer} 返回的数据可能不包含剧集列表`);
+      // 返回空数组，而不是抛出错误
+      return [];
     }
 
-    // 为每个剧集添加服务器标记和完整服务器信息
-    if (data.bangumi.episodes) {
+    // 为每个剧集添加服务器标记
+    if (data.bangumi.episodes && data.bangumi.episodes.length > 0) {
       data.bangumi.episodes.forEach(episode => {
         episode._server = targetServer;
-        // 修改commentId，添加服务器前缀，确保后续能正确获取弹幕
+        // 创建带服务器标记的commentId
         if (episode.commentId) {
-          // 保存原始commentId
-          episode._originalCommentId = episode.commentId;
-          // 创建带服务器标记的commentId
-          episode.commentId = `${targetServer}|${episode.commentId}`;
+          // 使用一个特殊的分隔符，确保不会与commentId本身冲突
+          episode.commentId = `${targetServer}#${episode.commentId}`;
         }
       });
     }
 
-    return data.bangumi.episodes;
+    return data.bangumi.episodes || [];
   } catch (error) {
     console.error(`从服务器 ${targetServer} 获取详情失败:`, error);
-    throw new Error(`获取详情失败: ${error.message}`);
+    // 返回空数组而不是抛出错误，让用户可以选择其他结果
+    return [];
   }
 }
 
@@ -365,7 +370,8 @@ async function getCommentsById(params) {
 
   if (!commentId) {
     console.log("commentId为空，无法获取弹幕");
-    return null;
+    // 返回空的弹幕数据而不是null
+    return { comments: [] };
   }
 
   // 解析多个服务器地址
@@ -375,15 +381,23 @@ async function getCommentsById(params) {
   let targetServer = servers[0]; // 默认使用第一个服务器
   let actualCommentId = commentId;
   
-  // 检查commentId是否包含服务器标记（格式：server|commentId）
-  if (commentId.includes('|')) {
+  // 检查commentId是否包含服务器标记（格式：server#commentId）
+  if (commentId.includes('#')) {
+    const parts = commentId.split('#');
+    if (parts.length >= 2) {
+      // 提取服务器地址（第一个部分）
+      targetServer = parts[0];
+      // 提取实际的commentId（剩下的部分）
+      actualCommentId = parts.slice(1).join('#');
+      console.log(`解析出服务器: ${targetServer}, commentId: ${actualCommentId}`);
+    }
+  } else if (commentId.includes('|')) {
+    // 兼容之前的格式
     const parts = commentId.split('|');
     if (parts.length >= 2) {
-      // 提取服务器地址
       targetServer = parts[0];
-      // 提取实际的commentId（可能是剩下的部分）
       actualCommentId = parts.slice(1).join('|');
-      console.log(`解析出服务器: ${targetServer}, commentId: ${actualCommentId}`);
+      console.log(`解析出服务器(兼容格式): ${targetServer}, commentId: ${actualCommentId}`);
     }
   } else {
     // 如果没有服务器标记，尝试从server参数中获取第一个服务器
@@ -393,7 +407,7 @@ async function getCommentsById(params) {
   console.log(`请求弹幕: ${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`);
 
   try {
-    // 只从指定服务器获取弹幕，不合并其他服务器的弹幕
+    // 只从指定服务器获取弹幕
     const response = await Widget.http.get(
       `${targetServer}/api/v2/comment/${actualCommentId}?withRelated=true&chConvert=1`,
       {
@@ -405,25 +419,30 @@ async function getCommentsById(params) {
     );
 
     if (!response) {
-      throw new Error(`从服务器 ${targetServer} 获取弹幕失败: 响应为空`);
+      console.error(`从服务器 ${targetServer} 获取弹幕失败: 响应为空`);
+      return { comments: [] };
     }
 
     let data;
     try {
       data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
     } catch (error) {
-      throw new Error(`从服务器 ${targetServer} 获取的弹幕数据解析失败: ${error.message}`);
+      console.error(`从服务器 ${targetServer} 获取的弹幕数据解析失败:`, error);
+      return { comments: [] };
     }
 
     console.log(`服务器 ${targetServer} 返回弹幕数量: ${data.comments ? data.comments.length : 0}`);
     
     if (!data.comments || data.comments.length === 0) {
       console.log(`服务器 ${targetServer} 返回的弹幕列表为空`);
+      // 确保返回的数据结构正确
+      if (!data.comments) data.comments = [];
     }
 
     return data;
   } catch (error) {
     console.error(`从服务器 ${targetServer} 获取弹幕失败:`, error);
-    throw new Error(`获取弹幕失败: ${error.message}`);
+    // 返回空的弹幕数据而不是抛出错误
+    return { comments: [] };
   }
 }
