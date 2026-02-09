@@ -14,23 +14,51 @@
  */
 WidgetMetadata = {
   id: "forward.auto.danmu_api",
-  title: "danmu_api弹幕",
-  version: "1.0.3",
+  title: "多源弹幕",
+  version: "5.4.0",
   requiredVersion: "0.0.2",
-  description: "从danmu_api获取弹幕【五折码：CHEAP.5;七折码：CHEAP】",
-  author: "huangxd",
+  description: "从多个API源获取弹幕，支持屏蔽和切换",
+  author: "小振ℓινє",
   site: "https://github.com/huangxd-/ForwardWidgets",
   globalParams: [
     {
       name: "server",
-      title: "自定义服务器(自部署项目地址：https://github.com/huangxd-/danmu_api.git)",
+      title: "主服务器地址",
       type: "input",
       placeholders: [
         {
-          title: "示例danmu_api",
-          value: "https://{domain}/{token}",
+          title: "主API地址",
+          value: "https://example.com/danmu_api",
         },
       ],
+    },
+    {
+      name: "server2",
+      title: "备用服务器地址",
+      type: "input",
+      placeholders: [
+        {
+          title: "备用API地址",
+          value: "https://another.com/danmu_api",
+        },
+      ],
+    },
+    {
+      name: "blockKeywords",
+      title: "屏蔽关键词(每行一个)",
+      type: "text",
+      placeholders: [
+        {
+          title: "输入要屏蔽的关键词，每行一个",
+          value: "广告\n测试\n预览",
+        },
+      ],
+    },
+    {
+      name: "enableBlocking",
+      title: "启用屏蔽功能",
+      type: "switch",
+      default: true,
     },
   ],
   modules: [
@@ -61,81 +89,233 @@ WidgetMetadata = {
   ],
 };
 
-async function searchDanmu(params) {
-  const { tmdbId, type, title, season, link, videoUrl, server } = params;
+// 全局变量存储多源搜索结果
+let multiSourceResults = {};
+let currentSource = 'server1';
 
-  let queryTitle = title;
-
-  // 调用弹弹play搜索API - 使用Widget.http.get
-  const response = await Widget.http.get(
-    `${server}/api/v2/search/anime?keyword=${queryTitle}`,
-    {
+// 辅助函数：请求单个服务器
+async function requestServer(serverUrl, urlPath, params) {
+  if (!serverUrl || !serverUrl.trim()) {
+    return null;
+  }
+  
+  const url = `${serverUrl.trim()}/${urlPath}`;
+  try {
+    const response = await Widget.http.get(url, {
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "ForwardWidgets/1.0.0",
       },
+      timeout: 10000 // 10秒超时
+    });
+    
+    if (response) {
+      return {
+        success: true,
+        data: typeof response.data === "string" ? JSON.parse(response.data) : response.data,
+        server: serverUrl
+      };
     }
-  );
-
-  if (!response) {
-    throw new Error("获取数据失败");
+  } catch (error) {
+    console.log(`服务器 ${serverUrl} 请求失败: ${error.message}`);
+    return {
+      success: false,
+      error: error.message,
+      server: serverUrl
+    };
   }
+  
+  return null;
+}
 
-  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-  console.log(data);
-
-  // 检查API返回状态
-  if (!data.success) {
-    throw new Error(data.errorMessage || "API调用失败");
+// 屏蔽功能：过滤不需要的搜索结果
+function filterBlockedItems(items, blockKeywords, enabled) {
+  if (!enabled || !blockKeywords || !blockKeywords.trim() || !items || items.length === 0) {
+    return items;
   }
-
-  // 开始过滤数据
-  let animes = [];
-  if (data.animes && data.animes.length > 0) {
-    animes = data.animes;
-    if (season) {
-      // order by season
-      const matchedAnimes = [];
-      const nonMatchedAnimes = [];
-
-      animes.forEach((anime) => {
-        if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
-            matchedAnimes.push(anime);
-        } else {
-            nonMatchedAnimes.push(anime);
-        }
-      });
-
-      // Combine matched and non-matched animes, with matched ones at the front
-      animes = [...matchedAnimes, ...nonMatchedAnimes];
-    } else {
-      // order by type
-      const matchedAnimes = [];
-      const nonMatchedAnimes = [];
-
-      animes.forEach((anime) => {
-        if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
-            matchedAnimes.push(anime);
-        } else {
-            nonMatchedAnimes.push(anime);
-        }
-      });
-
-      // Combine matched and non-matched animes, with matched ones at the front
-      animes = [...matchedAnimes, ...nonMatchedAnimes];
+  
+  const keywords = blockKeywords.trim().split('\n')
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+  
+  if (keywords.length === 0) {
+    return items;
+  }
+  
+  console.log("应用屏蔽关键词:", keywords);
+  
+  return items.filter(item => {
+    // 检查标题是否包含屏蔽关键词
+    const title = item.animeTitle || '';
+    const lowerTitle = title.toLowerCase();
+    
+    for (const keyword of keywords) {
+      if (keyword && lowerTitle.includes(keyword.toLowerCase())) {
+        console.log(`屏蔽项目: ${title} (关键词: ${keyword})`);
+        return false;
+      }
     }
+    
+    return true;
+  });
+}
+
+// 格式化搜索结果，添加来源标识
+function formatResults(results, serverName) {
+  if (!results || results.length === 0) {
+    return [];
   }
-  return {
-    animes: animes,
-  };
+  
+  return results.map(item => {
+    // 添加来源信息到对象中（不修改原始标题，以免影响显示）
+    return {
+      ...item,
+      _source: serverName,
+      _originalTitle: item.animeTitle,
+      // 如果需要，可以在标题后添加来源标记
+      animeTitle: `${item.animeTitle} [${serverName.substring(0, 3)}]`
+    };
+  });
+}
+
+async function searchDanmu(params) {
+  const { tmdbId, type, title, season, link, videoUrl, server, server2, blockKeywords, enableBlocking } = params;
+
+  let queryTitle = title;
+  
+  // 清空之前的搜索结果
+  multiSourceResults = {};
+  
+  // 同时发起两个服务器的请求
+  const promises = [];
+  
+  // 主服务器请求
+  if (server && server.trim()) {
+    promises.push(
+      requestServer(server, `api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`, params)
+        .then(result => {
+          if (result && result.success && result.data && result.data.animes) {
+            // 应用屏蔽功能
+            const filteredAnimes = filterBlockedItems(result.data.animes, blockKeywords, enableBlocking);
+            
+            // 保存到全局变量
+            multiSourceResults.server1 = {
+              animes: filteredAnimes,
+              source: '主服务器',
+              serverUrl: result.server,
+              success: true
+            };
+            
+            // 格式化结果
+            return {
+              animes: formatResults(filteredAnimes, '主服务器'),
+              source: '主服务器',
+              success: true
+            };
+          }
+          return {
+            animes: [],
+            source: '主服务器',
+            success: false,
+            error: result?.error || '请求失败'
+          };
+        })
+    );
+  }
+  
+  // 备用服务器请求
+  if (server2 && server2.trim()) {
+    promises.push(
+      requestServer(server2, `api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`, params)
+        .then(result => {
+          if (result && result.success && result.data && result.data.animes) {
+            // 应用屏蔽功能
+            const filteredAnimes = filterBlockedItems(result.data.animes, blockKeywords, enableBlocking);
+            
+            // 保存到全局变量
+            multiSourceResults.server2 = {
+              animes: filteredAnimes,
+              source: '备用服务器',
+              serverUrl: result.server,
+              success: true
+            };
+            
+            // 格式化结果
+            return {
+              animes: formatResults(filteredAnimes, '备用服务器'),
+              source: '备用服务器',
+              success: true
+            };
+          }
+          return {
+            animes: [],
+            source: '备用服务器',
+            success: false,
+            error: result?.error || '请求失败'
+          };
+        })
+    );
+  }
+  
+  if (promises.length === 0) {
+    throw new Error("请至少配置一个服务器地址");
+  }
+  
+  // 等待所有请求完成
+  const results = await Promise.allSettled(promises);
+  
+  console.log("多源搜索结果:", results);
+  
+  // 处理结果
+  const successfulResults = results
+    .filter(r => r.status === 'fulfilled' && r.value && r.value.success && r.value.animes.length > 0)
+    .map(r => r.value);
+  
+  // 默认使用第一个成功的源
+  if (successfulResults.length > 0) {
+    const defaultResult = successfulResults[0];
+    currentSource = defaultResult.source === '主服务器' ? 'server1' : 'server2';
+    
+    return {
+      animes: defaultResult.animes,
+      _multiSource: {
+        hasMultiple: successfulResults.length > 1,
+        sources: Object.keys(multiSourceResults),
+        currentSource: currentSource
+      }
+    };
+  }
+  
+  // 所有请求都失败或没有结果
+  throw new Error("所有服务器请求失败或无搜索结果");
+}
+
+// 切换搜索结果源（可以通过其他方式调用，如按钮）
+function switchSource(sourceKey) {
+  if (multiSourceResults[sourceKey] && multiSourceResults[sourceKey].animes) {
+    currentSource = sourceKey;
+    const sourceData = multiSourceResults[sourceKey];
+    
+    return {
+      animes: formatResults(sourceData.animes, sourceData.source),
+      _multiSource: {
+        hasMultiple: Object.keys(multiSourceResults).length > 1,
+        sources: Object.keys(multiSourceResults),
+        currentSource: currentSource
+      }
+    };
+  }
+  return null;
 }
 
 function matchSeason(anime, queryTitle, season) {
   console.log("start matchSeason: ", anime.animeTitle, queryTitle, season);
   let res = false;
-  if (anime.animeTitle.includes(queryTitle)) {
-    const title = anime.animeTitle.split("(")[0].trim();
+  // 注意：现在anime.animeTitle可能包含来源标记，需要处理
+  const originalTitle = anime._originalTitle || anime.animeTitle;
+  
+  if (originalTitle.includes(queryTitle)) {
+    const title = originalTitle.split("(")[0].trim();
     if (title.startsWith(queryTitle)) {
       const afterTitle = title.substring(queryTitle.length).trim();
       console.log("start matchSeason afterTitle: ", afterTitle);
@@ -220,50 +400,72 @@ function convertChineseNumber(chineseNumber) {
 }
 
 async function getDetailById(params) {
-  const { server, animeId } = params;
-  const response = await Widget.http.get(
-    `${server}/api/v2/bangumi/${animeId}`,
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0",
-      },
-    }
-  );
-
-  if (!response) {
-    throw new Error("获取数据失败");
+  const { animeId, server, server2 } = params;
+  
+  // 从全局变量中获取当前使用的服务器
+  const currentSourceData = multiSourceResults[currentSource];
+  let targetServer = server;
+  
+  if (currentSourceData && currentSourceData.serverUrl) {
+    targetServer = currentSourceData.serverUrl;
+  } else if (currentSource === 'server2' && server2) {
+    targetServer = server2;
   }
-
-  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-  console.log(data);
-
-  return data.bangumi.episodes;
+  
+  const response = await requestServer(targetServer, `api/v2/bangumi/${animeId}`, params);
+  
+  if (response && response.success) {
+    return response.data.bangumi.episodes;
+  }
+  
+  throw new Error("获取详情失败");
 }
 
 async function getCommentsById(params) {
-  const { server, commentId, link, videoUrl, season, episode, tmdbId, type, title } = params;
-
-  if (commentId) {
-    // 调用弹弹play弹幕API - 使用Widget.http.get
-    const response = await Widget.http.get(
-      `${server}/api/v2/comment/${commentId}?withRelated=true&chConvert=1`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "ForwardWidgets/1.0.0",
-        },
-      }
-    );
-
-    if (!response) {
-      throw new Error("获取数据失败");
-    }
-
-    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-    return data;
+  const { commentId } = params;
+  
+  if (!commentId) {
+    return null;
   }
-  return null;
+  
+  // 从全局变量中获取当前使用的服务器
+  const currentSourceData = multiSourceResults[currentSource];
+  const { server, server2 } = params;
+  let targetServer = server;
+  
+  if (currentSourceData && currentSourceData.serverUrl) {
+    targetServer = currentSourceData.serverUrl;
+  } else if (currentSource === 'server2' && server2) {
+    targetServer = server2;
+  }
+  
+  const response = await requestServer(targetServer, `api/v2/comment/${commentId}?withRelated=true&chConvert=1`, params);
+  
+  if (response && response.success) {
+    return response.data;
+  }
+  
+  throw new Error("获取弹幕失败");
+}
+
+// 新增：获取所有服务器的状态
+function getServerStatus() {
+  const status = {};
+  
+  for (const [key, data] of Object.entries(multiSourceResults)) {
+    status[key] = {
+      source: data.source,
+      success: data.success,
+      count: data.animes ? data.animes.length : 0,
+      serverUrl: data.serverUrl
+    };
+  }
+  
+  return status;
+}
+
+// 新增：手动触发重新搜索
+async function refreshSearch(params) {
+  // 重新执行搜索
+  return await searchDanmu(params);
 }
