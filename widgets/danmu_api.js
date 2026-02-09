@@ -133,7 +133,7 @@ async function searchDanmu(params) {
   // 去重处理：按标题和季数去重
   const uniqueResults = [];
   const seen = new Set();
-  
+  
   results.forEach(item => {
     const key = `${item.animeTitle}_${item.season || 1}`;
     if (!seen.has(key)) {
@@ -146,7 +146,7 @@ async function searchDanmu(params) {
   uniqueResults.sort((a, b) => {
     const aHasSeason = season && a.season === parseInt(season);
     const bHasSeason = season && b.season === parseInt(season);
-    
+    
     if (aHasSeason && !bHasSeason) return -1;
     if (!aHasSeason && bHasSeason) return 1;
     return 0;
@@ -182,7 +182,7 @@ async function searchDanmuAPI(server, queryTitle, season) {
   let animes = [];
   if (data.animes && data.animes.length > 0) {
     animes = data.animes;
-    
+    
     // 添加季数匹配逻辑
     animes.forEach(anime => {
       anime.season = extractSeasonFromTitle(anime.animeTitle, queryTitle);
@@ -198,7 +198,7 @@ async function searchDanmuAPI(server, queryTitle, season) {
       });
     }
   }
-  
+  
   return animes;
 }
 
@@ -219,13 +219,13 @@ async function searchBangumi(bangumiServer, queryTitle, season) {
   }
 
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-  
+  
   let animes = [];
   if (data.list && data.list.length > 0) {
     animes = data.list.map(item => {
       // 提取季数信息
       const seasonInfo = extractSeasonFromBangumi(item.name, item.name_cn);
-      
+      
       return {
         animeId: item.id,
         animeTitle: item.name_cn || item.name,
@@ -248,7 +248,7 @@ async function searchBangumi(bangumiServer, queryTitle, season) {
       });
     }
   }
-  
+  
   return animes;
 }
 
@@ -256,7 +256,7 @@ async function searchBangumi(bangumiServer, queryTitle, season) {
 function extractSeasonFromBangumi(jpTitle, cnTitle) {
   const titles = [jpTitle, cnTitle].filter(Boolean);
   let season = 1;
-  
+  
   for (const title of titles) {
     // 匹配季数模式：第二季、Season 2、S2等
     const seasonMatch = title.match(/(?:第\s*([一二三四五六七八九十\d]+)\s*季|Season\s*(\d+)|S\s*(\d+))/i);
@@ -271,7 +271,7 @@ function extractSeasonFromBangumi(jpTitle, cnTitle) {
       }
     }
   }
-  
+  
   return { season };
 }
 
@@ -279,7 +279,7 @@ function extractSeasonFromBangumi(jpTitle, cnTitle) {
 function extractSeasonFromTitle(animeTitle, queryTitle) {
   // 尝试从标题中提取季数
   const cleanTitle = animeTitle.replace(/【.*?】/g, '').trim();
-  
+  
   // 匹配季数模式
   const seasonPatterns = [
     /第\s*([一二三四五六七八九十\d]+)\s*季/,
@@ -288,14 +288,14 @@ function extractSeasonFromTitle(animeTitle, queryTitle) {
     /(?:Part|part)\s*(\d+)/i,
     /(\d+)(?:nd|rd|th|st)\s*Season/i
   ];
-  
+  
   for (const pattern of seasonPatterns) {
     const match = cleanTitle.match(pattern);
     if (match && match[1]) {
       return convertChineseNumber(match[1]);
     }
   }
-  
+  
   // 如果没有明确季数，默认为第1季
   return 1;
 }
@@ -303,12 +303,12 @@ function extractSeasonFromTitle(animeTitle, queryTitle) {
 function matchSeason(anime, queryTitle, season) {
   console.log("start matchSeason: ", anime.animeTitle, queryTitle, season);
   let res = false;
-  
+  
   // 如果有明确的季数字段
   if (anime.season && anime.season.toString() === season.toString()) {
     return true;
   }
-  
+  
   if (anime.animeTitle && anime.animeTitle.includes(queryTitle)) {
     const title = anime.animeTitle.split("(")[0].trim();
     if (title.startsWith(queryTitle)) {
@@ -335,7 +335,7 @@ function matchSeason(anime, queryTitle, season) {
 
 function convertChineseNumber(chineseNumber) {
   if (!chineseNumber) return 1;
-  
+  
   // 如果是阿拉伯数字，直接转换
   if (/^\d+$/.test(chineseNumber)) {
     return Number(chineseNumber);
@@ -364,7 +364,7 @@ function convertChineseNumber(chineseNumber) {
   let lastUnit = 1;
 
   const str = chineseNumber.toString();
-  
+  
   for (let i = 0; i < str.length; i++) {
     const char = str[i];
 
@@ -400,7 +400,7 @@ function convertChineseNumber(chineseNumber) {
 
 async function getDetailById(params) {
   const { server, animeId, source, bangumiServer } = params;
-  
+  
   if (source === "bangumi") {
     // 使用Bangumi API获取详情
     return await getBangumiDetail(bangumiServer, animeId);
@@ -445,7 +445,7 @@ async function getBangumiDetail(bangumiServer, animeId) {
   }
 
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-  
+  
   if (data && data.data) {
     // 转换为标准格式
     return data.data.map(ep => ({
@@ -456,7 +456,7 @@ async function getBangumiDetail(bangumiServer, animeId) {
       airdate: ep.airdate
     }));
   }
-  
+  
   return [];
 }
 
@@ -519,7 +519,7 @@ async function getBangumiComments(bangumiServer, subjectId) {
   }
 
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-  
+  
   if (data && data.data) {
     // 将评论转换为弹幕格式
     const comments = data.data.map(item => ({
@@ -531,13 +531,13 @@ async function getBangumiComments(bangumiServer, subjectId) {
       user: item.user ? item.user.nickname : "匿名用户",
       timestamp: item.created_at
     }));
-    
+    
     return {
       comments: comments,
       count: comments.length,
       source: "bangumi"
     };
   }
-  
+  
   return { comments: [], count: 0, source: "bangumi" };
 }
