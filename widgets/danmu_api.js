@@ -15,81 +15,65 @@
 WidgetMetadata = {
   id: "forward.auto.danmu_api",
   title: "LogVar",
-  version: "5.4.0",
+  version: "5.2.0",
   requiredVersion: "0.0.2",
-  description: "从多个API源获取弹幕，支持屏蔽词过滤",
+  description: "从多个源获取弹幕",
   author: "小振ℓινє",
   site: "https://github.com/huangxd-/ForwardWidgets",
   globalParams: [
     {
+      name: "danmuSource",
+      title: "弹幕源选择",
+      type: "select",
+      value: ["auto", "danmu_api", "bangumi"],
+      default: "auto",
+      desc: "auto:自动选择; danmu_api:LogVar; bangumi:番组计划"
+    },
+    {
       name: "server",
-      title: "主服务器地址",
+      title: "自定义服务器(自部署项目地址：https://github.com/huangxd-/danmu_api.git)",
       type: "input",
       placeholders: [
         {
-          title: "主API地址",
-          value: "https://example.com/danmu_api",
+          title: "示例danmu_api",
+          value: "https://{domain}/{token}",
         },
       ],
     },
     {
-      name: "server2",
-      title: "副服务器地址(同时使用)",
+      name: "bangumiServer",
+      title: "Bangumi服务器",
       type: "input",
       placeholders: [
         {
-          title: "备用API地址",
-          value: "https://another.com/danmu_api",
+          title: "示例bangumi",
+          value: "https://api.bangumi.tv",
         },
       ],
+      default: "https://api.bangumi.tv"
     },
     {
-      name: "blockWords",
-      title: "屏蔽词（多个用逗号分隔）",
+      name: "filterWords",
+      title: "屏蔽词(用逗号分隔)",
       type: "input",
       placeholders: [
         {
-          title: "例如：不良,违禁,不需要",
+          title: "例如:广告,网址,违禁词",
           value: "",
         },
       ],
+      default: ""
     },
     {
-      name: "enableBlockFilter",
+      name: "enableFilter",
       title: "启用屏蔽词过滤",
       type: "select",
-      options: [
-        { title: "启用", value: "true" },
-        { title: "禁用", value: "false" }
-      ],
-      defaultValue: "true"
-    },
-    {
-      name: "mergeStrategy",
-      title: "合并策略",
-      type: "select",
-      options: [
-        { title: "全部合并去重", value: "merge_all" },
-        { title: "主服务器优先", value: "primary_first" },
-        { title: "智能选择最快", value: "smart_fast" }
-      ],
-      defaultValue: "merge_all"
-    },
-    {
-      name: "timeout",
-      title: "请求超时(毫秒)",
-      type: "input",
-      placeholders: [
-        {
-          title: "默认5000毫秒",
-          value: "5000",
-        },
-      ],
+      value: ["true", "false"],
+      default: "true"
     }
   ],
   modules: [
     {
-      //id需固定为searchDanmu
       id: "searchDanmu",
       title: "搜索弹幕",
       functionName: "searchDanmu",
@@ -97,7 +81,6 @@ WidgetMetadata = {
       params: [],
     },
     {
-      //id需固定为getDetail
       id: "getDetail",
       title: "获取详情",
       functionName: "getDetailById",
@@ -105,7 +88,6 @@ WidgetMetadata = {
       params: [],
     },
     {
-      //id需固定为getComments
       id: "getComments",
       title: "获取弹幕",
       functionName: "getCommentsById",
@@ -115,311 +97,219 @@ WidgetMetadata = {
   ],
 };
 
-// 辅助函数：同时请求多个服务器
-async function requestMultipleServers(urlPath, params, options = {}) {
-  const { server, server2, mergeStrategy = "merge_all", timeout = 5000 } = params;
-  const servers = [];
-  
-  // 添加主服务器
-  if (server && server.trim()) {
-    servers.push({ url: server.trim(), type: "primary" });
-  }
-  
-  // 添加副服务器
-  if (server2 && server2.trim()) {
-    servers.push({ url: server2.trim(), type: "secondary" });
-  }
-  
-  if (servers.length === 0) {
-    throw new Error("请至少配置一个服务器地址");
-  }
-  
-  // 根据合并策略处理
-  if (mergeStrategy === "primary_first" && servers.length > 0) {
-    // 主服务器优先，只使用主服务器
-    const primaryServer = servers.find(s => s.type === "primary");
-    if (primaryServer) {
-      const url = `${primaryServer.url}/${urlPath}`;
-      try {
-        const response = await Widget.http.get(url, {
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": "ForwardWidgets/1.0.0",
-          },
-          timeout: parseInt(timeout),
-          ...options
-        });
-        return [{ data: response.data, server: primaryServer.url }];
-      } catch (error) {
-        console.log(`主服务器请求失败: ${error.message}`);
-        // 主服务器失败，尝试副服务器
-        const secondaryServer = servers.find(s => s.type === "secondary");
-        if (secondaryServer) {
-          const url = `${secondaryServer.url}/${urlPath}`;
-          try {
-            const response = await Widget.http.get(url, {
-              headers: {
-                "Content-Type": "application/json",
-                "User-Agent": "ForwardWidgets/1.0.0",
-              },
-              timeout: parseInt(timeout),
-              ...options
-            });
-            return [{ data: response.data, server: secondaryServer.url }];
-          } catch (error2) {
-            throw new Error(`所有服务器请求失败: ${error2.message}`);
-          }
-        }
-        throw error;
-      }
+async function searchDanmu(params) {
+  const { tmdbId, type, title, season, link, videoUrl, server, danmuSource, bangumiServer } = params;
+
+  let queryTitle = title;
+  let results = [];
+
+  // 根据配置选择API源
+  if (danmuSource === "auto" || danmuSource === "danmu_api") {
+    try {
+      const danmuApiResults = await searchDanmuAPI(server, queryTitle, season);
+      danmuApiResults.forEach(item => {
+        item.source = "danmu_api";
+        item.sourceName = "LogVar";
+      });
+      results = results.concat(danmuApiResults);
+    } catch (error) {
+      console.error("Danmu API搜索失败:", error);
     }
   }
-  
-  if (mergeStrategy === "smart_fast") {
-    // 智能选择最快服务器
-    return [await getFastestServer(urlPath, params)];
+
+  if (danmuSource === "auto" || danmuSource === "bangumi") {
+    try {
+      const bangumiResults = await searchBangumi(bangumiServer, queryTitle, season);
+      bangumiResults.forEach(item => {
+        item.source = "bangumi";
+        item.sourceName = "番组计划";
+      });
+      results = results.concat(bangumiResults);
+    } catch (error) {
+      console.error("Bangumi搜索失败:", error);
+    }
   }
+
+  // 去重处理：按标题和季数去重
+  const uniqueResults = [];
+  const seen = new Set();
   
-  // 默认：全部合并去重
-  const requests = servers.map(serverInfo => {
-    const url = `${serverInfo.url}/${urlPath}`;
-    return Widget.http.get(url, {
+  results.forEach(item => {
+    const key = `${item.animeTitle}_${item.season || 1}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueResults.push(item);
+    }
+  });
+
+  // 排序：优先匹配季数的结果
+  uniqueResults.sort((a, b) => {
+    const aHasSeason = season && a.season === parseInt(season);
+    const bHasSeason = season && b.season === parseInt(season);
+    
+    if (aHasSeason && !bHasSeason) return -1;
+    if (!aHasSeason && bHasSeason) return 1;
+    return 0;
+  });
+
+  return {
+    animes: uniqueResults,
+  };
+}
+
+// Danmu API搜索
+async function searchDanmuAPI(server, queryTitle, season) {
+  const response = await Widget.http.get(
+    `${server}/api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`,
+    {
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "ForwardWidgets/1.0.0",
       },
-      timeout: parseInt(timeout),
-      ...options
-    }).then(response => ({
-      data: response.data,
-      server: serverInfo.url,
-      type: serverInfo.type
-    })).catch(error => {
-      console.log(`服务器 ${serverInfo.url} 请求失败: ${error.message}`);
-      return null;
-    });
-  });
-  
-  // 等待所有请求完成
-  const responses = await Promise.all(requests);
-  
-  // 过滤掉失败的请求
-  const validResponses = responses.filter(response => response && response.data);
-  
-  if (validResponses.length === 0) {
-    throw new Error("所有服务器请求失败");
-  }
-  
-  return validResponses;
-}
-
-// 获取最快的服务器
-async function getFastestServer(urlPath, params) {
-  const { server, server2, timeout = 5000 } = params;
-  const servers = [];
-  
-  if (server && server.trim()) {
-    servers.push(server.trim());
-  }
-  
-  if (server2 && server2.trim()) {
-    servers.push(server2.trim());
-  }
-  
-  const speedTests = servers.map(async (serverUrl) => {
-    const startTime = Date.now();
-    try {
-      const url = `${serverUrl}/${urlPath}`;
-      await Widget.http.get(url, {
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "ForwardWidgets/1.0.0",
-        },
-        timeout: parseInt(timeout)
-      });
-      const endTime = Date.now();
-      return {
-        url: serverUrl,
-        speed: endTime - startTime,
-        success: true
-      };
-    } catch (error) {
-      return {
-        url: serverUrl,
-        speed: Infinity,
-        success: false,
-        error: error.message
-      };
     }
-  });
-  
-  const results = await Promise.all(speedTests);
-  const successfulResults = results.filter(r => r.success).sort((a, b) => a.speed - b.speed);
-  
-  if (successfulResults.length === 0) {
-    throw new Error("所有服务器请求失败");
-  }
-  
-  // 使用最快的服务器进行实际请求
-  const fastestServer = successfulResults[0];
-  const url = `${fastestServer.url}/${urlPath}`;
-  const response = await Widget.http.get(url, {
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "ForwardWidgets/1.0.0",
-    },
-    timeout: parseInt(timeout)
-  });
-  
-  return {
-    data: response.data,
-    server: fastestServer.url,
-    speed: fastestServer.speed
-  };
-}
-
-// 屏蔽词过滤函数
-function filterByBlockWords(items, blockWords, enableFilter = true) {
-  if (!enableFilter || !blockWords || blockWords.trim() === '') {
-    return items;
-  }
-  
-  const words = blockWords.split(',').map(word => word.trim().toLowerCase()).filter(word => word);
-  
-  if (words.length === 0) {
-    return items;
-  }
-  
-  return items.filter(item => {
-    if (!item.animeTitle) return true;
-    
-    const title = item.animeTitle.toLowerCase();
-    // 检查是否包含任何屏蔽词
-    return !words.some(word => title.includes(word));
-  });
-}
-
-// 去重函数：根据animeId去重
-function deduplicateAnimes(animesList) {
-  const seen = new Set();
-  const result = [];
-  
-  // 合并所有animes
-  const allAnimes = animesList.flat();
-  
-  for (const anime of allAnimes) {
-    if (!seen.has(anime.animeId)) {
-      seen.add(anime.animeId);
-      result.push(anime);
-    }
-  }
-  
-  return result;
-}
-
-async function searchDanmu(params) {
-  const { tmdbId, type, title, season, link, videoUrl, server, server2, blockWords, enableBlockFilter = "true" } = params;
-
-  let queryTitle = title;
-
-  // 同时请求所有配置的服务器
-  const responses = await requestMultipleServers(
-    `api/v2/search/anime?keyword=${encodeURIComponent(queryTitle)}`, 
-    params
   );
-  
-  console.log("收到服务器响应数量:", responses.length);
-  
-  // 处理所有响应数据
-  const allAnimes = [];
-  let lastErrorMessage = "";
-  
-  for (const response of responses) {
-    try {
-      const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-      
-      console.log("服务器响应数据:", data);
-      
-      // 检查API返回状态
-      if (data.success && data.animes && data.animes.length > 0) {
-        allAnimes.push({
-          animes: data.animes,
-          server: response.server
-        });
-      } else {
-        lastErrorMessage = data.errorMessage || "API调用失败";
-      }
-    } catch (error) {
-      console.log("解析响应数据失败:", error);
+
+  if (!response) {
+    throw new Error("获取数据失败");
+  }
+
+  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+
+  if (!data.success) {
+    throw new Error(data.errorMessage || "API调用失败");
+  }
+
+  let animes = [];
+  if (data.animes && data.animes.length > 0) {
+    animes = data.animes;
+    
+    // 添加季数匹配逻辑
+    animes.forEach(anime => {
+      anime.season = extractSeasonFromTitle(anime.animeTitle, queryTitle);
+    });
+
+    if (season) {
+      animes.sort((a, b) => {
+        const aMatch = a.season === parseInt(season);
+        const bMatch = b.season === parseInt(season);
+        if (aMatch && !bMatch) return -1;
+        if (!aMatch && bMatch) return 1;
+        return 0;
+      });
     }
   }
   
-  // 合并所有animes并去重
-  const allAnimeItems = allAnimes.flatMap(item => item.animes);
-  const mergedAnimes = deduplicateAnimes([allAnimeItems]);
-  
-  console.log("合并后animes数量:", mergedAnimes.length);
-  
-  if (mergedAnimes.length === 0) {
-    throw new Error(lastErrorMessage || "未找到相关弹幕");
-  }
-  
-  // 应用屏蔽词过滤
-  const enableFilter = enableBlockFilter === "true";
-  const filteredAnimes = filterByBlockWords(mergedAnimes, blockWords, enableFilter);
-  
-  console.log("屏蔽词过滤后数量:", filteredAnimes.length);
-  
-  if (filteredAnimes.length === 0) {
-    throw new Error("所有结果已被屏蔽词过滤");
-  }
-  
-  // 开始过滤和排序数据
-  let finalAnimes = [...filteredAnimes];
-  
-  if (season) {
-    // 按季匹配排序
-    const matchedAnimes = [];
-    const nonMatchedAnimes = [];
+  return animes;
+}
 
-    finalAnimes.forEach((anime) => {
-      if (matchSeason(anime, queryTitle, season) && !(queryTitle.includes("电影") || queryTitle.includes("movie"))) {
-          matchedAnimes.push(anime);
-      } else {
-          nonMatchedAnimes.push(anime);
-      }
+// Bangumi搜索
+async function searchBangumi(bangumiServer, queryTitle, season) {
+  const response = await Widget.http.get(
+    `${bangumiServer}/search/subject/${encodeURIComponent(queryTitle)}?type=2&responseGroup=large`,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "ForwardWidgets/1.0.0",
+      },
+    }
+  );
+
+  if (!response) {
+    throw new Error("获取Bangumi数据失败");
+  }
+
+  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+  
+  let animes = [];
+  if (data.list && data.list.length > 0) {
+    animes = data.list.map(item => {
+      // 提取季数信息
+      const seasonInfo = extractSeasonFromBangumi(item.name, item.name_cn);
+      
+      return {
+        animeId: item.id,
+        animeTitle: item.name_cn || item.name,
+        season: seasonInfo.season,
+        episodeCount: item.eps || 0,
+        type: item.type === 2 ? "tv" : "movie", // Bangumi类型映射
+        rating: item.rating ? item.rating.score : 0,
+        image: item.images ? item.images.large : null
+      };
     });
 
-    // 合并匹配和不匹配的animes，匹配的放在前面
-    finalAnimes = [...matchedAnimes, ...nonMatchedAnimes];
-  } else {
-    // 按类型排序
-    const matchedAnimes = [];
-    const nonMatchedAnimes = [];
-
-    finalAnimes.forEach((anime) => {
-      if (queryTitle.includes("电影") || queryTitle.includes("movie")) {
-          matchedAnimes.push(anime);
-      } else {
-          nonMatchedAnimes.push(anime);
-      }
-    });
-
-    // 合并匹配和不匹配的animes，匹配的放在前面
-    finalAnimes = [...matchedAnimes, ...nonMatchedAnimes];
+    // 如果有季数信息，进行排序
+    if (season) {
+      animes.sort((a, b) => {
+        const aMatch = a.season === parseInt(season);
+        const bMatch = b.season === parseInt(season);
+        if (aMatch && !bMatch) return -1;
+        if (!aMatch && bMatch) return 1;
+        return 0;
+      });
+    }
   }
   
-  return {
-    animes: finalAnimes,
-    sourceCount: responses.length,
-    filteredCount: mergedAnimes.length - filteredAnimes.length
-  };
+  return animes;
+}
+
+// 从Bangumi标题中提取季数
+function extractSeasonFromBangumi(jpTitle, cnTitle) {
+  const titles = [jpTitle, cnTitle].filter(Boolean);
+  let season = 1;
+  
+  for (const title of titles) {
+    // 匹配季数模式：第二季、Season 2、S2等
+    const seasonMatch = title.match(/(?:第\s*([一二三四五六七八九十\d]+)\s*季|Season\s*(\d+)|S\s*(\d+))/i);
+    if (seasonMatch) {
+      const num = seasonMatch[1] || seasonMatch[2] || seasonMatch[3];
+      if (num) {
+        const parsed = convertChineseNumber(num.toString());
+        if (parsed > 0) {
+          season = parsed;
+          break;
+        }
+      }
+    }
+  }
+  
+  return { season };
+}
+
+// 从标题中提取季数
+function extractSeasonFromTitle(animeTitle, queryTitle) {
+  // 尝试从标题中提取季数
+  const cleanTitle = animeTitle.replace(/【.*?】/g, '').trim();
+  
+  // 匹配季数模式
+  const seasonPatterns = [
+    /第\s*([一二三四五六七八九十\d]+)\s*季/,
+    /Season\s*(\d+)/i,
+    /S\s*(\d+)/i,
+    /(?:Part|part)\s*(\d+)/i,
+    /(\d+)(?:nd|rd|th|st)\s*Season/i
+  ];
+  
+  for (const pattern of seasonPatterns) {
+    const match = cleanTitle.match(pattern);
+    if (match && match[1]) {
+      return convertChineseNumber(match[1]);
+    }
+  }
+  
+  // 如果没有明确季数，默认为第1季
+  return 1;
 }
 
 function matchSeason(anime, queryTitle, season) {
   console.log("start matchSeason: ", anime.animeTitle, queryTitle, season);
   let res = false;
-  if (anime.animeTitle.includes(queryTitle)) {
+  
+  // 如果有明确的季数字段
+  if (anime.season && anime.season.toString() === season.toString()) {
+    return true;
+  }
+  
+  if (anime.animeTitle && anime.animeTitle.includes(queryTitle)) {
     const title = anime.animeTitle.split("(")[0].trim();
     if (title.startsWith(queryTitle)) {
       const afterTitle = title.substring(queryTitle.length).trim();
@@ -444,6 +334,8 @@ function matchSeason(anime, queryTitle, season) {
 }
 
 function convertChineseNumber(chineseNumber) {
+  if (!chineseNumber) return 1;
+  
   // 如果是阿拉伯数字，直接转换
   if (/^\d+$/.test(chineseNumber)) {
     return Number(chineseNumber);
@@ -471,8 +363,10 @@ function convertChineseNumber(chineseNumber) {
   let current = 0;
   let lastUnit = 1;
 
-  for (let i = 0; i < chineseNumber.length; i++) {
-    const char = chineseNumber[i];
+  const str = chineseNumber.toString();
+  
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
 
     if (digits[char] !== undefined) {
       // 数字
@@ -501,39 +395,149 @@ function convertChineseNumber(chineseNumber) {
     result += current;
   }
 
-  return result;
+  return result || 1;
 }
 
 async function getDetailById(params) {
-  const { animeId } = params;
+  const { server, animeId, source, bangumiServer } = params;
   
-  // 同时请求所有服务器，使用第一个成功的响应
-  const responses = await requestMultipleServers(`api/v2/bangumi/${animeId}`, params);
-  
-  // 使用第一个成功的响应
-  const response = responses[0];
+  if (source === "bangumi") {
+    // 使用Bangumi API获取详情
+    return await getBangumiDetail(bangumiServer, animeId);
+  } else {
+    // 使用默认Danmu API
+    const response = await Widget.http.get(
+      `${server}/api/v2/bangumi/${animeId}`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "ForwardWidgets/1.0.0",
+        },
+      }
+    );
+
+    if (!response) {
+      throw new Error("获取数据失败");
+    }
+
+    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+
+    console.log(data);
+
+    return data.bangumi.episodes;
+  }
+}
+
+// Bangumi获取详情
+async function getBangumiDetail(bangumiServer, animeId) {
+  const response = await Widget.http.get(
+    `${bangumiServer}/v0/episodes?subject_id=${animeId}`,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "ForwardWidgets/1.0.0",
+      },
+    }
+  );
+
+  if (!response) {
+    throw new Error("获取Bangumi详情失败");
+  }
+
   const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-
-  console.log("详情数据:", data);
-
-  return data.bangumi.episodes;
+  
+  if (data && data.data) {
+    // 转换为标准格式
+    return data.data.map(ep => ({
+      episodeId: ep.id,
+      name: ep.name || `第${ep.sort}集`,
+      sort: ep.sort,
+      duration: ep.duration || "24:00",
+      airdate: ep.airdate
+    }));
+  }
+  
+  return [];
 }
 
 async function getCommentsById(params) {
-  const { commentId } = params;
+  const { server, commentId, link, videoUrl, season, episode, tmdbId, type, title, source, bangumiServer, filterWords, enableFilter } = params;
 
-  if (commentId) {
-    // 同时请求所有服务器，使用第一个成功的响应
-    const responses = await requestMultipleServers(
-      `api/v2/comment/${commentId}?withRelated=true&chConvert=1`, 
-      params
+  let commentsData = null;
+
+  if (source === "bangumi") {
+    // 使用Bangumi API获取评论（这里Bangumi没有弹幕，我们用评论替代）
+    commentsData = await getBangumiComments(bangumiServer, commentId);
+  } else {
+    // 调用弹弹play弹幕API
+    const response = await Widget.http.get(
+      `${server}/api/v2/comment/${commentId}?withRelated=true&chConvert=1`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "ForwardWidgets/1.0.0",
+        },
+      }
     );
-    
-    // 使用第一个成功的响应
-    const response = responses[0];
-    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
 
-    return data;
+    if (!response) {
+      throw new Error("获取数据失败");
+    }
+
+    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+    commentsData = data;
   }
-  return null;
+
+  // 启用屏蔽词过滤
+  if (commentsData && commentsData.comments && enableFilter === "true" && filterWords) {
+    const words = filterWords.split(',').map(word => word.trim()).filter(word => word.length > 0);
+    if (words.length > 0) {
+      commentsData.comments = commentsData.comments.filter(comment => {
+        const content = comment.content || comment.text || '';
+        return !words.some(word => content.includes(word));
+      });
+    }
+  }
+
+  return commentsData;
+}
+
+// Bangumi获取评论（作为弹幕替代）
+async function getBangumiComments(bangumiServer, subjectId) {
+  const response = await Widget.http.get(
+    `${bangumiServer}/v0/subjects/${subjectId}/comments?limit=100`,
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "ForwardWidgets/1.0.0",
+      },
+    }
+  );
+
+  if (!response) {
+    throw new Error("获取Bangumi评论失败");
+  }
+
+  const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
+  
+  if (data && data.data) {
+    // 将评论转换为弹幕格式
+    const comments = data.data.map(item => ({
+      content: item.content,
+      time: 0,
+      color: "16777215",
+      mode: 1,
+      fontSize: 25,
+      user: item.user ? item.user.nickname : "匿名用户",
+      timestamp: item.created_at
+    }));
+    
+    return {
+      comments: comments,
+      count: comments.length,
+      source: "bangumi"
+    };
+  }
+  
+  return { comments: [], count: 0, source: "bangumi" };
 }
